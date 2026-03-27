@@ -1,3 +1,5 @@
+#include <FlexCAN_T4.h>
+#include <SD.h>
 #include <math.h>
 #include <stdio.h>
 
@@ -7,7 +9,7 @@
 const int adcPins[] = {A0,A1,A2,A3,A4,A5,A6,A7,A8,A9,A17,A16};
 const int numChannels = sizeof(adcPins) / sizeof(adcPins[0]);
 int adcValues[numChannels];
-const int samplingRate = 1000 //in microsecond = 1kHz
+const int samplingRate = 1000; //in microsecond = 1kHz
 IntervalTimer myTimer;
 
 // Define PWM Outputs
@@ -16,7 +18,7 @@ const int pwmFreq = 1000;
 
 // Define CAN setups
 FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> Can0; // using CAN Controller No.3 
-const int CANBaud = 500000 //CAN Speed
+const int CANBaud = 500000; //CAN Speed
 
 // Interrupt routine for ADC reading
 void AdcISR() {
@@ -27,14 +29,14 @@ void AdcISR() {
 
 // Convert ADC value into 0 - 5V value
 float Convert2Volt(int inVal) {
-  return (float(inVal) * 5 /1023);
+  return ((float(inVal) * 5) /1023);
 }
 
 // Setup PWM pins 
 void SetupPWM(){
-  for (int i = 0; i < sizeof(pwmPins); i++){
-    pinMode(i, OUTPUT); // set output pins
-    analogWriteFrequency(i, pwmFreq);
+  for (int i = 0; i < (sizeof(pwmPins)/sizeof(pwmPins[0])); i++){
+    pinMode(pwmPins[i], OUTPUT); // set output pins
+    analogWriteFrequency(pwmPins[i], pwmFreq);
   }
   analogWriteResolution(8);         // 8-bit resolution (0–255)
 }
@@ -45,19 +47,20 @@ void InitCan(){
   Can0.setBaudRate(CANBaud);
   Can0.enableFIFO();
   Can0.enableFIFOInterrupt();
+  Can0.onReceive(ReadFrame);
 }
 // CAN variables
-int mode = 0; //1 = comfort, 2 = sport, 3 = sport plus
-float lat_Accel;
-float long_Accel;
-int throttle_Pos;
-float steering_Angle;
-float steering_Angle_Rate;
-float FL_Speed;
-float FR_Speed;
-float RL_Speed;
-float RR_Speed;
-int brake_Status;
+volatile int mode = 0; //1 = comfort, 2 = sport, 3 = sport plus
+volatile float lat_Accel;
+volatile float long_Accel;
+volatile int throttle_Pos;
+volatile float steering_Angle;
+volatile float steering_Angle_Rate;
+volatile float FL_Speed;
+volatile float FR_Speed;
+volatile float RL_Speed;
+volatile float RR_Speed;
+volatile int brake_Status;
 
 // Read and convert CAN data
 void ReadFrame(const CAN_message_t & frame){
@@ -75,11 +78,11 @@ void ReadFrame(const CAN_message_t & frame){
         mode = 2;
         break;
       case 0x30:
-        Serial.println("Sprot +")
+        Serial.println("Sprot +");
         mode = 3;
         break;
       default: 
-        Serial.println("error")
+        Serial.println("error");
         mode = 0;
 
     }
@@ -101,7 +104,10 @@ void ReadFrame(const CAN_message_t & frame){
   else if (id == 0x17C){
     // Throttle Pedal Position [0,255]
     uint8_t raw_Pedal_Position = frame.buf[0] & 0xFF;
-    throttle_Pos = raw_Pedal_Position
+    throttle_Pos = raw_Pedal_Position;
+
+    uint8_t raw_Brake_Status = (frame.buf[6] >> 5) & 0x01;
+    brake_Status = raw_Brake_Status;
   }
 
   else if (id == 0x14A){
@@ -123,25 +129,20 @@ void ReadFrame(const CAN_message_t & frame){
     // Wheel speeds Front Right [0,250] (kph)
     uint32_t combined_FR_Speed1 = (frame.buf[1] << 8) | frame.buf[2];
     uint32_t combined_FR_Speed2 = (combined_FR_Speed1 << 8) | frame.buf[3];
-    uint32_t raw_FR_Speed = (combined_FR_Speed >> 2) & 0x00007FFF;
+    uint32_t raw_FR_Speed = (combined_FR_Speed2 >> 2) & 0x00007FFF;
     FR_Speed = 0.01 * raw_FR_Speed;
 
     // Wheel speeds Rear Left [0,250] (kph)
     uint32_t combined_RL_Speed1 = (frame.buf[3] << 8) | frame.buf[4];
     uint32_t combined_RL_Speed2 = (combined_RL_Speed1 << 8) | frame.buf[5];
-    uint32_t raw_RL_Speed = (combined_RL_Speed >> 3) & 0x00007FFF;
+    uint32_t raw_RL_Speed = (combined_RL_Speed2 >> 3) & 0x00007FFF;
     RL_Speed = 0.01 * raw_RL_Speed;
 
     // Wheel speeds Rear Right [0,250] (kph)
     uint32_t combined_RR_Speed1 = (frame.buf[5] << 8) | frame.buf[6];
     uint32_t combined_RR_Speed2 = (combined_RR_Speed1 << 8) | frame.buf[7];
-    uint32_t raw_RR_Speed = (combined_RR_Speed >> 4) & 0x00007FFF;
+    uint32_t raw_RR_Speed = (combined_RR_Speed2 >> 4) & 0x00007FFF;
     RR_Speed = 0.01 * raw_RR_Speed;
-  }
-
-  else if (id == 0x17C){
-    uint8_t raw_Brake_Status = (frame.buf[6] >> 5) & 0x01;
-    brake_Status = raw_Brake_Status;
   }
 }
 
@@ -152,10 +153,12 @@ void setup() {
   Serial.begin(115200); 
   myTimer.begin(AdcISR, samplingRate); //start ADC reading according to sampling rate
   SetupPWM(); // set PWM pinout and frequency
+  InitCan();
 
 }
 
 void loop() {
+  Can0.events()
   // put your main code here, to run repeatedly:
 
 }
