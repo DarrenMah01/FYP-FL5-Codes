@@ -1,0 +1,111 @@
+#include <math.h>
+#include <stdio.h>
+
+
+
+// Define your ADC pins
+const int adcPins[] = {A0,A1,A2,A3,A4,A5,A6,A7,A8,A9,A17,A16};
+const int numChannels = sizeof(adcPins) / sizeof(adcPins[0]);
+int adcValues[numChannels];
+const int samplingRate = 1000 //in microsecond = 1kHz
+IntervalTimer myTimer;
+
+// Define PWM Outputs
+const int pwmPins[] = {2,3,4,5};
+const int pwmFreq = 1000;
+
+// Define CAN setups
+FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> Can0; // using CAN Controller No.3 
+const int CANBaud = 500000 //CAN Speed
+
+// Interrupt routine for ADC reading
+void AdcISR() {
+  for (int i = 0; i < numChannels; i++){
+    adcValues[i] = analogRead(adcPins[i]);
+  }
+}
+
+// Convert ADC value into 0 - 5V value
+float Convert2Volt(int inVal) {
+  return (float(inVal) * 5 /1023);
+}
+
+// Setup PWM pins 
+void SetupPWM(){
+  for (int i = 0; i < sizeof(pwmPins); i++){
+    pinMode(i, OUTPUT); // set output pins
+    analogWriteFrequency(i, pwmFreq);
+  }
+  analogWriteResolution(8);         // 8-bit resolution (0–255)
+}
+
+// Setup CAN Bus
+void InitCan(){
+  Can0.begin();
+  Can0.setBaudRate(CANBaud);
+  Can0.enableFIFO();
+  Can0.enableFIFOInterrupt();
+}
+// CAN variables
+int mode = 0; //1 = comfort, 2 = sport, 3 = sport plus
+float lat_Accel;
+float long_Accel;
+
+
+// Read and convert CAN data
+void ReadFrame(const CAN_message_t & frame){
+  uint32_t id = frame.id;
+
+  if (id == 0x22B){ 
+    // Vehicle Mode
+    switch (frame.buf[4]){
+      case 0x10:
+        Serial.println("Comfort");
+        mode = 1;
+        break;
+      case 0x20:
+        Serial.println("Sport");
+        mode = 2;
+        break;
+      case 0x30:
+        Serial.println("Sprot +")
+        mode = 3;
+        break;
+      default: 
+        Serial.println("error")
+        mode = 0;
+
+    }
+  }
+
+  else if (id == 0x094){
+
+    // Lateral Acceleration
+    uint16_t combined_lat = (frame.buf[0] << 8) | frame.buf[1];
+    uint16_t raw_lat_Accel = (combined_lat >> 6) & 0x03FF;  
+    lat_Accel = -0.035 * raw_lat_Accel + 17.92;
+
+    // Longitudanal Acceleration
+    uint16_t combined_long = (frame.buf[3] << 8) | frame.buf[4];
+    uint16_t raw_long_Accel = combined_long & 0x03FF;  
+    long_Accel = -0.035 * raw_long_Accel + 17.92;
+  }
+
+  
+
+}
+
+// Main setup code
+
+void setup() {
+
+  Serial.begin(115200); 
+  myTimer.begin(AdcISR, samplingRate); //start ADC reading according to sampling rate
+  SetupPWM(); // set PWM pinout and frequency
+
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+
+}
