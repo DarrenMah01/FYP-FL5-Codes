@@ -50,7 +50,14 @@ void InitCan(){
 int mode = 0; //1 = comfort, 2 = sport, 3 = sport plus
 float lat_Accel;
 float long_Accel;
-
+int throttle_Pos;
+float steering_Angle;
+float steering_Angle_Rate;
+float FL_Speed;
+float FR_Speed;
+float RL_Speed;
+float RR_Speed;
+int brake_Status;
 
 // Read and convert CAN data
 void ReadFrame(const CAN_message_t & frame){
@@ -80,19 +87,62 @@ void ReadFrame(const CAN_message_t & frame){
 
   else if (id == 0x094){
 
-    // Lateral Acceleration
+    // Lateral Acceleration [-20,20] m/s2
     uint16_t combined_lat = (frame.buf[0] << 8) | frame.buf[1];
     uint16_t raw_lat_Accel = (combined_lat >> 6) & 0x03FF;  
     lat_Accel = -0.035 * raw_lat_Accel + 17.92;
 
-    // Longitudanal Acceleration
+    // Longitudinal Acceleration [-20,20] m/s2
     uint16_t combined_long = (frame.buf[3] << 8) | frame.buf[4];
     uint16_t raw_long_Accel = combined_long & 0x03FF;  
     long_Accel = -0.035 * raw_long_Accel + 17.92;
   }
 
-  
+  else if (id == 0x17C){
+    // Throttle Pedal Position [0,255]
+    uint8_t raw_Pedal_Position = frame.buf[0] & 0xFF;
+    throttle_Pos = raw_Pedal_Position
+  }
 
+  else if (id == 0x14A){
+    // Steering Angle [-500,500] deg
+    int16_t raw_Signed_Steer_Angle = (frame.buf[5] << 8) | frame.buf[6];
+    steering_Angle = -0.1 * raw_Signed_Steer_Angle;
+
+    //Steering Angle Rate [-3000,3000] deg/s
+    int16_t raw_Signed_Steer_Angle_Rate = (frame.buf[2] << 8) | frame.buf[3];
+    steering_Angle_Rate = -1 * raw_Signed_Steer_Angle_Rate;
+  }
+
+  else if (id == 0x1D0){
+    // Wheel speeds Front Left [0,250] (kph)
+    uint16_t combined_FL_Speed = (frame.buf[0] << 8) | frame.buf[1];
+    uint16_t raw_FL_Speed = (combined_FL_Speed >> 1) & 0x7FFF;
+    FL_Speed = 0.01 * raw_FL_Speed;
+
+    // Wheel speeds Front Right [0,250] (kph)
+    uint32_t combined_FR_Speed1 = (frame.buf[1] << 8) | frame.buf[2];
+    uint32_t combined_FR_Speed2 = (combined_FR_Speed1 << 8) | frame.buf[3];
+    uint32_t raw_FR_Speed = (combined_FR_Speed >> 2) & 0x00007FFF;
+    FR_Speed = 0.01 * raw_FR_Speed;
+
+    // Wheel speeds Rear Left [0,250] (kph)
+    uint32_t combined_RL_Speed1 = (frame.buf[3] << 8) | frame.buf[4];
+    uint32_t combined_RL_Speed2 = (combined_RL_Speed1 << 8) | frame.buf[5];
+    uint32_t raw_RL_Speed = (combined_RL_Speed >> 3) & 0x00007FFF;
+    RL_Speed = 0.01 * raw_RL_Speed;
+
+    // Wheel speeds Rear Right [0,250] (kph)
+    uint32_t combined_RR_Speed1 = (frame.buf[5] << 8) | frame.buf[6];
+    uint32_t combined_RR_Speed2 = (combined_RR_Speed1 << 8) | frame.buf[7];
+    uint32_t raw_RR_Speed = (combined_RR_Speed >> 4) & 0x00007FFF;
+    RR_Speed = 0.01 * raw_RR_Speed;
+  }
+
+  else if (id == 0x17C){
+    uint8_t raw_Brake_Status = (frame.buf[6] >> 5) & 0x01;
+    brake_Status = raw_Brake_Status;
+  }
 }
 
 // Main setup code
