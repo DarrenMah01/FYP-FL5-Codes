@@ -3,10 +3,22 @@
 #include <math.h>
 #include <stdio.h>
 
+// Datalogging 
+File logFile;
+const int chipSelect = BUILTIN_SDCARD;
 
+elapsedMicros logTimer;
+elapsedMillis serialTimer;
+const int logInterval = 5000; // log every 5ms (200Hz)
+
+// Read PWM Variavles
+volatile uint32_t riseTime = 0;
+volatile uint32_t width = 0;
+volatile uint32_t period = 0;
+volatile uint32_t lastEdgeTime = 0;
 
 // Define your ADC pins
-const int adcPins[] = {A0,A1,A2,A3,A4,A5,A6,A7,A8,A9,A17,A16};
+const int adcPins[] = {A9,A8,A7,A6,A5,A4,A3,A2,A1,A0,A17};
 const int numChannels = sizeof(adcPins) / sizeof(adcPins[0]);
 int adcValues[numChannels];
 const int samplingRate = 1000; //in microsecond = 1kHz
@@ -24,6 +36,19 @@ const int CANBaud = 500000; //CAN Speed
 void AdcISR() {
   for (int i = 0; i < numChannels; i++){
     adcValues[i] = analogRead(adcPins[i]);
+  }
+}
+
+// read pwm 
+void pwmISR() {
+  uint32_t now = micros();
+  lastEdgeTime = now;
+
+  if (digitalRead(40)) {   // RISING edge
+    period = now - riseTime;
+    riseTime = now;
+  } else {                 // FALLING edge
+    width = now - riseTime;
   }
 }
 
@@ -146,6 +171,149 @@ void ReadFrame(const CAN_message_t & frame){
   }
 }
 
+// Initialize datalog 
+void InitSD() {
+  if (!SD.begin(chipSelect)) {
+    Serial.println("SD init failed!");
+    while (1);
+  }
+  Serial.println("SD init success");
+
+  int fileIndex = 0;
+  String filename;
+
+  while (true) {
+    filename = "data" + String(fileIndex) + ".csv";
+    if (!SD.exists(filename.c_str())) break;
+    fileIndex++;
+  }
+
+  logFile = SD.open(filename.c_str(), FILE_WRITE);
+
+  if (logFile) {
+    Serial.println("File opened");
+
+    // CSV header
+    logFile.println("time,mode,lat,long,throttle,brake,steer,steer_rate,FL_WSpeed,FR_WSpeed,RL_WSpeed,RR_WSpeed,RL_Stroke,RR_Stroke,FL_Stroke,FR_Stroke,RL_Cur,RR_Cur,FL_Cur,FR_Cur,RL_Accel,RR_Accel,FL_Accel,FL_PWM");
+    logFile.flush();
+  } else {
+    Serial.println("Error opening file!");
+  }
+}
+
+// Log Data
+void LogData() {
+  if (!logFile) return;
+
+  logFile.print(millis());
+  logFile.print(",");
+
+  logFile.print(mode); logFile.print(",");
+  logFile.print(lat_Accel); logFile.print(",");
+  logFile.print(long_Accel); logFile.print(",");
+  logFile.print(throttle_Pos); logFile.print(",");
+  logFile.print(brake_Status); logFile.print(",");
+  logFile.print(steering_Angle); logFile.print(",");
+  logFile.print(steering_Angle_Rate); logFile.print(",");
+  logFile.print(FL_Speed); logFile.print(",");
+  logFile.print(FR_Speed); logFile.print(",");
+  logFile.print(RL_Speed); logFile.print(",");
+  logFile.print(RR_Speed); logFile.print(",");
+
+  // ADC values 
+  for (int i = 0; i < 11; i++) {
+    logFile.print(adcValues[i]);
+    logFile.print(",");
+  }
+
+  logFile.print(GetPWMDuty());
+
+  logFile.println();
+
+  // Flush occasionally (not every write)
+  static int counter = 0;
+  counter++;
+  if (counter >= 50) { // every 50 logs
+    logFile.flush();
+    counter = 0;
+  }
+}
+
+void PrintData() {
+  Serial.print("Time: "); Serial.print(millis()); Serial.println(" ms");
+
+  Serial.print("Mode: "); Serial.println(mode);
+
+  Serial.print("Lat Accel: "); Serial.print(lat_Accel, 3); Serial.println(" m/s^2");
+  Serial.print("Long Accel: "); Serial.print(long_Accel, 3); Serial.println(" m/s^2");
+
+  Serial.print("Throttle: "); Serial.print(throttle_Pos); Serial.println(" %");
+  Serial.print("Brake: "); Serial.println(brake_Status);
+
+  Serial.print("Steering Angle: "); Serial.print(steering_Angle, 2); Serial.println(" deg");
+  Serial.print("Steering Rate: "); Serial.print(steering_Angle_Rate, 2); Serial.println(" deg/s");
+
+  Serial.print("Wheel Speeds (kph): ");
+  Serial.print("FL="); Serial.print(FL_Speed, 2); Serial.print(" | ");
+  Serial.print("FR="); Serial.print(FR_Speed, 2); Serial.print(" | ");
+  Serial.print("RL="); Serial.print(RL_Speed, 2); Serial.print(" | ");
+  Serial.print("RR="); Serial.print(RR_Speed, 2); Serial.println();
+
+  // --- Suspension Stroke ---
+  Serial.print("Stroke (mm): ");
+  Serial.print("FL="); Serial.print(adcValues[2]); Serial.print(" | ");
+  Serial.print("FR="); Serial.print(adcValues[3]); Serial.print(" | ");
+  Serial.print("RL="); Serial.print(adcValues[0]); Serial.print(" | ");
+  Serial.print("RR="); Serial.print(adcValues[1]); Serial.println();
+
+  // --- Current ---
+  Serial.print("Coil Current (A): ");
+  Serial.print("FL="); Serial.print(adcValues[6]); Serial.print(" | ");
+  Serial.print("FR="); Serial.print(adcValues[7]); Serial.print(" | ");
+  Serial.print("RL="); Serial.print(adcValues[4]); Serial.print(" | ");
+  Serial.print("RR="); Serial.print(adcValues[5]); Serial.println();
+
+  // --- Acceleration ---
+  Serial.print("Susp Accel (m/s^2): ");
+  Serial.print("FL="); Serial.print(adcValues[10]); Serial.print(" | ");
+  Serial.print("RL="); Serial.print(adcValues[8]); Serial.print(" | ");
+  Serial.print("RR="); Serial.print(adcValues[9]); Serial.println();
+
+  // --- PWM ---
+  Serial.print("PWM Output: ");
+  Serial.print("FR="); Serial.print(GetPWMDuty(), 1); Serial.print(" %");
+
+  Serial.println();
+
+  Serial.println("--------------------------------------------------");
+}
+
+float GetPWMDuty() {
+  noInterrupts();
+  uint32_t w = width;
+  uint32_t p = period;
+  uint32_t last = lastEdgeTime;
+  interrupts();
+
+  // No signal yet
+  if (p == 0) return 0;
+
+  // Detect 100% (no falling edge for a while)
+  if ((micros() - last) > 2000) { // >1 period (2kHz = 500µs)
+    if (digitalRead(40)) return 100.0;
+    else return 0.0;
+  }
+
+  float duty = (w * 100.0) / p;
+
+  // Clamp to clean values
+  if (duty > 100) duty = 100;
+  if (duty < 0) duty = 0;
+
+  return duty;
+}
+
+
 // Main setup code
 
 void setup() {
@@ -154,11 +322,20 @@ void setup() {
   myTimer.begin(AdcISR, samplingRate); //start ADC reading according to sampling rate
   SetupPWM(); // set PWM pinout and frequency
   InitCan();
-
+  InitSD();
+  pinMode(40, INPUT);
+  attachInterrupt(digitalPinToInterrupt(40), pwmISR, CHANGE);
 }
 
 void loop() {
-  Can0.events()
-  // put your main code here, to run repeatedly:
+  Can0.events();
+  if (logTimer >= logInterval) {
+    logTimer = 0;
+    LogData();
+  }
+  if (serialTimer >= 200) { // 5 Hz 
+    serialTimer = 0;
+    PrintData();
+  }
 
 }
